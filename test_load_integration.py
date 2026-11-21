@@ -30,6 +30,13 @@ def warehouse_context():
         / "001_create_tables.sql"
     ).read_text()
 
+    validation_view_ddl = (
+    Path(__file__).resolve().parent
+    / "sql"
+    / "004_validated_sales_view.sql"
+).read_text()
+    
+
     created = False
     try:
         with psycopg.connect(**base_settings) as conn:
@@ -45,6 +52,7 @@ def warehouse_context():
                     )
                 )
                 cur.execute(ddl)
+                cur.execute(validation_view_ddl)
         created = True
 
         yield settings
