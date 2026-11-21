@@ -35,7 +35,11 @@ def warehouse_context():
     / "sql"
     / "004_validated_sales_view.sql"
 ).read_text()
-    
+    load_runs_ddl = (
+    Path(__file__).resolve().parent
+    / "sql"
+    / "005_sales_load_runs.sql"
+).read_text()
 
     created = False
     try:
@@ -53,6 +57,7 @@ def warehouse_context():
                 )
                 cur.execute(ddl)
                 cur.execute(validation_view_ddl)
+                cur.execute(load_runs_ddl)
         created = True
 
         yield settings
@@ -174,7 +179,35 @@ def test_loads_valid_line_and_records_rejection(warehouse_context):
                 ORDER BY order_item_id
             """)
             assert cur.fetchall() == [(602, 2, 150,True)]
+    with psycopg.connect(**settings) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    batch_id,
+                    status,
+                    staged_line_count,
+                    fact_rows_changed,
+                    rejection_rows_changed,
+                    rejections_resolved,
+                    error_message,
+                    finished_at >= started_at AS valid_timing
+                FROM sales_load_runs
+                ORDER BY run_id
+            """)
 
+            assert cur.fetchall() == [
+                (1, "succeeded", 2, 1, 1, 0, None, True),
+                (1, "succeeded", 2, 0, 0, 0, None, True),
+                (1, "succeeded", 2, 1, 0, 1, None, True),
+                (1, "succeeded", 2, 0, 1, 0, None, True),
+            ]
+
+            cur.execute(
+                "SELECT COUNT(DISTINCT run_id) FROM sales_load_runs"
+            )
+            assert cur.fetchone()[0] == 4
+
+           
 def test_fact_audit_failure_rolls_back(warehouse_context):
     settings = warehouse_context
 
@@ -203,6 +236,46 @@ def test_fact_audit_failure_rolls_back(warehouse_context):
 
     with psycopg.connect(**settings) as conn:
         with conn.cursor() as cur:
+
+            cur.execute("""
+                SELECT
+                    batch_id,
+                    status,
+                    error_message,
+                    finished_at >= started_at AS valid_timing,
+                    staged_line_count,
+                    fact_rows_changed,
+                    rejection_rows_changed,
+                    rejections_resolved
+                FROM sales_load_runs
+            """)
+
+            runs = cur.fetchall()
+            assert len(runs) == 1
+
+            (
+                batch_id,
+                status,
+                error_message,
+                valid_timing,
+                staged_count,
+                fact_count,
+                rejection_count,
+                resolved_count,
+            ) = runs[0]
+
+            assert batch_id == 1
+            assert status == "failed"
+            assert "Reconciliation failed" in error_message
+            assert valid_timing is True
+            assert (
+                staged_count,
+                fact_count,
+                rejection_count,
+                resolved_count,
+            ) == (None, None, None, None)
+
+            
             cur.execute("SELECT COUNT(*) FROM stg_sales")
             assert cur.fetchone()[0] == 2
 
@@ -243,6 +316,46 @@ def test_rejection_audit_failure_rolls_back(warehouse_context):
 
     with psycopg.connect(**settings) as conn:
         with conn.cursor() as cur:
+
+            cur.execute("""
+                SELECT
+                    batch_id,
+                    status,
+                    error_message,
+                    finished_at >= started_at AS valid_timing,
+                    staged_line_count,
+                    fact_rows_changed,
+                    rejection_rows_changed,
+                    rejections_resolved
+                FROM sales_load_runs
+            """)
+
+            runs = cur.fetchall()
+            assert len(runs) == 1
+
+            (
+                batch_id,
+                status,
+                error_message,
+                valid_timing,
+                staged_count,
+                fact_count,
+                rejection_count,
+                resolved_count,
+            ) = runs[0]
+
+            assert batch_id == 1
+            assert status == "failed"
+            assert "Rejection reconciliation failed" in error_message
+            assert valid_timing is True
+            assert (
+                staged_count,
+                fact_count,
+                rejection_count,
+                resolved_count,
+            ) == (None, None, None, None)
+
+            
             cur.execute("SELECT COUNT(*) FROM stg_sales")
             assert cur.fetchone()[0] == 2
 

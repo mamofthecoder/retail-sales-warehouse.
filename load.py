@@ -71,12 +71,28 @@ WHERE v.validation_status = 'Valid'
   ) AND v.batch_id = %s;"""
 
 def load_sales_batch(batch_id, connection_settings):
-  
+    # Save the run record before starting the load transaction.
+    with psycopg.connect(**connection_settings) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sales_load_runs (batch_id)
+                VALUES (%s)
+                RETURNING run_id
+                """,
+                (batch_id,),
+            )
+            run_id = cur.fetchone()[0]
+
     try:
         with psycopg.connect(**connection_settings) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM stg_sales WHERE batch_id = %s",
+                    """
+                    SELECT COUNT(*)
+                    FROM stg_sales
+                    WHERE batch_id = %s
+                    """,
                     (batch_id,),
                 )
                 stg_lines_count = cur.fetchone()[0]
@@ -107,21 +123,43 @@ def load_sales_batch(batch_id, connection_settings):
                 cur.execute(rejection_audit_sql, (batch_id,))
                 rejection_mismatches = cur.fetchall()
 
-                
                 if rejection_mismatches:
                     raise ValueError(
-                        f"Rejection reconciliation failed for batch {batch_id}: "
-                        f"{rejection_mismatches}"
+                        f"Rejection reconciliation failed for batch "
+                        f"{batch_id}: {rejection_mismatches}"
                     )
- 
+
+                # Commit success and the sales changes together.
+                cur.execute(
+                    """
+                    UPDATE sales_load_runs
+                    SET status = 'succeeded',
+                        finished_at = clock_timestamp(),
+                        error_message = NULL,
+                        staged_line_count = %s,
+                        fact_rows_changed = %s,
+                        rejection_rows_changed = %s,
+                        rejections_resolved = %s
+                    WHERE run_id = %s
+                    """,
+                    (
+                        stg_lines_count,
+                        fact_rows_changed,
+                        rejection_rows_changed,
+                        rejections_resolved,
+                        run_id,
+                    ),
+                )
 
         logging.info(
-            "Batch %s committed: %s fact rows changed",
+            "Run %s: batch %s committed, %s fact rows changed",
+            run_id,
             batch_id,
             fact_rows_changed,
         )
 
         return {
+            "run_id": run_id,
             "batch_id": batch_id,
             "staged_line_count": stg_lines_count,
             "fact_rows_changed": fact_rows_changed,
@@ -129,8 +167,31 @@ def load_sales_batch(batch_id, connection_settings):
             "rejections_resolved": rejections_resolved,
         }
 
-    except Exception:
-        logging.exception("Batch %s failed", batch_id)
+    except Exception as exc:
+        # The load connection has already rolled back.
+        logging.exception(
+            "Run %s: batch %s failed", run_id, batch_id
+        )
+
+        try:
+            with psycopg.connect(**connection_settings) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE sales_load_runs
+                        SET status = 'failed',
+                            finished_at = clock_timestamp(),
+                            error_message = %s
+                        WHERE run_id = %s
+                        """,
+                        (str(exc), run_id),
+                    )
+        except Exception:
+            # Preserve the original load error if logging also fails.
+            logging.exception(
+                "Could not save failure details for run %s", run_id
+            )
+
         raise
     
 def main():
