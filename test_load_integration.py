@@ -35,10 +35,17 @@ def warehouse_context():
     / "sql"
     / "004_validated_sales_view.sql"
 ).read_text()
+
     load_runs_ddl = (
     Path(__file__).resolve().parent
     / "sql"
     / "005_sales_load_runs.sql"
+).read_text()
+
+    load_runs_index_ddl = (
+    Path(__file__).resolve().parent
+    / "sql"
+    / "006_sales_load_runs_index.sql"
 ).read_text()
 
     created = False
@@ -58,6 +65,7 @@ def warehouse_context():
                 cur.execute(ddl)
                 cur.execute(validation_view_ddl)
                 cur.execute(load_runs_ddl)
+                cur.execute(load_runs_index_ddl)
         created = True
 
         yield settings
