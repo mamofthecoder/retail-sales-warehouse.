@@ -6,7 +6,7 @@ import psycopg
 from psycopg import sql
 import pytest
 
-from load import load_sales_batch
+from load import load_sales_batch,get_pending_batch_ids
 from unittest.mock import patch
 
 @pytest.fixture
@@ -397,3 +397,21 @@ total_revenue,units_sold
    OR average_revenue_per_sales_line IS NOT NULL
    OR revenue_per_unit IS NOT NULL""")
             assert cur.rowcount == 0
+
+def test_pending_batches_exclude_successful_runs(warehouse_context):
+    settings = warehouse_context
+
+    with psycopg.connect(**settings) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO stg_sales (batch_id, order_item_id)
+                VALUES (2, 201), (2, 202), (3, 301), (4, 401);
+
+                INSERT INTO sales_load_runs (batch_id, status)
+                VALUES
+                    (3, 'failed'),
+                    (4, 'failed'),
+                    (4, 'succeeded');
+            """)
+
+    assert get_pending_batch_ids(settings) == [2, 3]

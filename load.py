@@ -193,20 +193,53 @@ def load_sales_batch(batch_id, connection_settings):
             )
 
         raise
-    
+
+def get_pending_batch_ids(connection_settings):
+    with psycopg.connect(**connection_settings) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT DISTINCT s.batch_id
+FROM stg_sales s
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM sales_load_runs r
+    WHERE r.batch_id = s.batch_id
+      AND r.status = 'succeeded'
+)
+ORDER BY s.batch_id;""")
+            return [row[0] for row in cur.fetchall()]
+        
 def main():
     parser = argparse.ArgumentParser(
-    description="Load and reconcile a retail sales batch."
+        description="Load and reconcile retail sales batches."
     )
 
-    parser.add_argument("--batch-id",type=int,required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--batch-id", type=int)
+    mode.add_argument(
+        "--pending",
+        action="store_true",
+        help="Process batches with no successful run.",
+    )
 
     args = parser.parse_args()
-    print(load_sales_batch(args.batch_id,{
-    "host": "localhost",
-    "dbname": "retail_warehouse",
-    "user": "postgres",
-    }))
+
+    connection_settings = {
+        "host": "localhost",
+        "dbname": "retail_warehouse",
+        "user": "postgres",
+    }
+
+    if args.pending:
+        batch_ids = get_pending_batch_ids(connection_settings)
+    else:
+        batch_ids = [args.batch_id]
+
+    if not batch_ids:
+        print("No pending batches.")
+        return
+
+    for batch_id in batch_ids:
+        print(load_sales_batch(batch_id, connection_settings))
 
 if __name__ == "__main__":
     main()

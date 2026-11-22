@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from load import load_sales_batch
+from load import load_sales_batch,get_pending_batch_ids, load_sales_batch
 
 
 def mock_connection():
@@ -112,3 +112,18 @@ def test_audit_failure_rolls_back_and_records_failure(
         "status = 'succeeded'" in call.args[0]
         for call in load_cur.execute.call_args_list
     )
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        ([], []),
+        ([(2,), (3,), (5,)], [2, 3, 5]),
+    ],
+)
+def test_get_pending_batch_ids(rows, expected):
+    context, cur = mock_connection()
+    cur.fetchall.return_value = rows
+
+    with patch("load.psycopg.connect", return_value=context):
+        result = get_pending_batch_ids({})
+
+    assert result == expected

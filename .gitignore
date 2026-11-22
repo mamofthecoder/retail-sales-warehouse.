@@ -8,3 +8,5 @@ venv/
 !.env.example
 .pgpass
 *.log
+load.log
+.sales_load.lock
